@@ -1,5 +1,7 @@
 # opencode-handoff-p2p
 
+[![CI](https://github.com/Eldorado-ling/opencode-handoff-p2p/actions/workflows/ci.yml/badge.svg)](https://github.com/Eldorado-ling/opencode-handoff-p2p/actions/workflows/ci.yml)
+
 **用 GitHub 私人仓库当邮局，在不同机器 / 协作者之间点对点传递 OpenCode 会话分享链接。**
 
 简化版——只用 P2P 模式（每人一个自有私有仓库），**没有共享中心仓库**。攻击面最小、配置最简、信任模型最清晰。
@@ -46,7 +48,7 @@ Tier 1: 文件名 regex
 Tier 2: 发件人在 trust.json 白名单
 Tier 3: 内容字节级合规（≤ 200 字节 / ASCII only / 单 LF 收尾 / URL regex）
 Tier 4: GitHub API: commit author + committer 都等于声称的发件人
-Tier 5: GPG 签名验证（可选，强烈建议开）
+Tier 5: GitHub commit 签名验证（可选，强烈建议开；抵抗 author/committer 元数据伪造）
 
 全过 → 抓 URL 内容 → 注入会话 → git rm 删除文件
 ```
@@ -67,8 +69,8 @@ Tier 5: GPG 签名验证（可选，强烈建议开）
 ```
 1. 是你 inbox repo 的 collaborator（你亲自加的人）
 2. 在你 trusted_senders 白名单里
-3. 拿到能用 trusted sender 身份 push 的方法
-4. 拿到 GPG 私钥能签名（如果 require_signed_commits = true）
+3. 伪造 trusted sender 的 commit author / committer 元数据
+4. 同时通过 GitHub 的 commit 签名验证（如果 `require_signed_commits = true`）
 ```
 
 这 4 个**同时成立**意味着：基本只剩"你信任的某个人本身想坑你"或"那个人的电脑被攻陷"。普通互联网用户全部物理上无法影响你。
@@ -91,9 +93,11 @@ opencode-handoff-p2p/
 ├── INSTALL.md         ← 详细部署步骤
 ├── USAGE.md           ← 日常使用 + 排错
 ├── SKILL.md           ← 协议正文（agent 读它）
-├── verify_inbox.py    ← Reference 验证脚本（约 290 行）
-├── trust.json         ← 部署时各人写自己的，不会被打包
-└── config.json        ← 部署时各人写自己的，不会被打包
+├── verify_inbox.py    ← Reference 验证脚本
+├── tests/             ← 标准库单元测试
+├── .github/workflows/ ← Linux / Windows CI
+├── trust.json.example ← 信任配置模板
+└── config.json.example ← 传输配置模板
 ```
 
 ---
@@ -117,6 +121,8 @@ cp config.json.example config.json
 
 # 4. 重启 OpenCode，问 "检查收件箱"，agent 自动 bootstrap
 ```
+
+支持当前与历史分享地址：`opncd.ai/share/*`、`opncd.ai/s/*`、`opencode.ai/s/*`。
 
 完整步骤、GPG、硬件密钥、Fine-grained PAT：见 **[INSTALL.md](./INSTALL.md)**
 日常使用、错误排查：见 **[USAGE.md](./USAGE.md)**
