@@ -2,6 +2,8 @@
 
 **用 GitHub 私人仓库当邮局，在不同机器 / 协作者之间点对点传递 OpenCode 会话分享链接。**
 
+> **维护状态（2026-10-30）**：[OpenCode v1.19.1 更新日志](https://dev.opencode.ai/changelog)已于 2026-10-15 宣布停用会话分享及现有分享链接，[当前 SDK 文档](https://opencode.ai/docs/sdk/)也确认分享接口返回错误。本仓库保留的是历史链接协议和验证器；URL 校验或本地测试通过，不能证明官方分享服务可用。下文的 `/share` 与抓取链接流程仅作历史参考。本地 JSON 导出交接迁移尚未实现。
+
 简化版——只用 P2P 模式（每人一个自有私有仓库），**没有共享中心仓库**。攻击面最小、配置最简、信任模型最清晰。
 
 > 如果你需要团队中心仓库 + P2P 双模式，请用 [opencode-handoff](https://github.com/Eldorado-ling/opencode-handoff-skill)。这个 P2P-only 版本更适合：
