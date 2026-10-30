@@ -7,7 +7,7 @@
 ### 发送 handoff
 
 ```
-1. /share 拿到 opncd.ai/share/<id>
+1. `/share` 拿到 `opncd.ai/share/<id>` 或 `opncd.ai/s/<id>`
 2. 跟 agent 说："发给 alice"
 3. agent 给你预览：
      即将发送：
@@ -67,7 +67,7 @@ chmod 444 ~/.config/opencode/skills/opencode-handoff-p2p/trust.json
 
 跑了 `/share` 之后 URL 已经滚出 agent 上下文窗口。
 
-解决：再跑一次 `/share`，立刻说"发给 X"。或者直接贴：`发给 X：opncd.ai/share/...`。
+解决：再跑一次 `/share`，立刻说"发给 X"。或者直接贴：`发给 X：https://opncd.ai/share/...`（`/s/...` 形式也支持）。
 
 ### "接收人 'X' 没有 P2P 收件箱仓库，或你没有写权限"
 

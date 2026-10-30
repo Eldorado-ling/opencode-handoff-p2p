@@ -1,3 +1,20 @@
+# Changelog
+
+## Unreleased
+
+### Compatibility
+
+- Keep `SKILL.md` discovery metadata within OpenCode's 1024-character description limit.
+- Accept current and legacy OpenCode share URL forms, including `/s/` paths and IDs containing `_` or `-`.
+
+### Reliability and security
+
+- Reject nested inbox paths, impossible timestamps, invalid GitHub usernames, malformed repo arguments, and clone/repo mismatches.
+- Fail closed when `git ls-files` fails instead of reporting a false empty inbox.
+- Add timeouts to external commands.
+- Correct threat-model wording for unsigned metadata spoofing, replay, and hardware signing keys.
+- Add cross-platform, multi-version CI and a standard-library test suite.
+
 ## v1.0.1 — 2026-06-07
 
 ### Security fixes (CRITICAL)
@@ -32,9 +49,6 @@
   remain blocked.
 
   Reported by Gemini Code Assist on PR #4 to TheArchitectit/awesome-opencode-skills.
-
-
-# Changelog
 
 ## v1.0.0 — 2026-06-06
 

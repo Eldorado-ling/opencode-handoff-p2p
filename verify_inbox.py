@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -23,22 +24,19 @@ from typing import Optional, Tuple
 SKILL_DIR = Path(__file__).parent.resolve()
 TRUST_FILE = SKILL_DIR / "trust.json"
 
-FILENAME_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z--from-[a-zA-Z0-9-]+\.txt$"
-)
 FILENAME_CAPTURE_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z--from-([a-zA-Z0-9-]+)\.txt$"
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)--from-([a-zA-Z0-9-]+)\.txt$"
 )
 URL_RE = re.compile(
-    rb"^https://(?:opncd\.ai/share|opencode\.ai/s)/[A-Za-z0-9]+/?\r?\n$"
+    rb"^https://(?:opncd\.ai/(?:share|s)|opencode\.ai/s)/[A-Za-z0-9_-]+/?\r?\n$"
 )
-USERNAME_RE = re.compile(
-    r"^[a-zA-Z0-9]$|^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$"
-)
+USERNAME_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?!-))*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")
 USERNAME_MAX_LEN = 39
-REPO_PATH_RE = re.compile(r"^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$")
+REPO_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]{1,100}$")
+SHA_RE = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 
 MAX_CONTENT_BYTES = 200
+COMMAND_TIMEOUT_SECONDS = 30
 
 HARDENED_ENV = {
     **os.environ,
@@ -62,12 +60,50 @@ def fail(status: str, detail: str) -> None:
     sys.exit(1)
 
 
-def run(cmd) -> Tuple[int, bytes, bytes]:
+def run(cmd, timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, bytes, bytes]:
     try:
-        p = subprocess.run(cmd, capture_output=True, env=HARDENED_ENV, check=False)
+        p = subprocess.run(
+            cmd,
+            capture_output=True,
+            env=HARDENED_ENV,
+            check=False,
+            timeout=timeout,
+        )
         return p.returncode, p.stdout, p.stderr
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout or b""
+        stderr = (e.stderr or b"") + f"command timed out after {timeout}s".encode()
+        return 124, stdout, stderr
     except Exception as e:
         return -1, b"", str(e).encode("utf-8", "replace")
+
+
+def is_valid_username(value: str) -> bool:
+    return len(value) <= USERNAME_MAX_LEN and USERNAME_RE.fullmatch(value) is not None
+
+
+def parse_repo(repo: str) -> Optional[Tuple[str, str]]:
+    if repo.count("/") != 1:
+        return None
+    owner, name = repo.split("/", 1)
+    if not is_valid_username(owner):
+        return None
+    if not REPO_NAME_RE.fullmatch(name) or name in {".", ".."}:
+        return None
+    return owner.lower(), name.lower()
+
+
+def parse_github_remote(url: str) -> Optional[Tuple[str, str]]:
+    patterns = (
+        r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
+        r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$",
+        r"^ssh://git@github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, url.strip(), re.IGNORECASE)
+        if match:
+            return parse_repo(f"{match.group(1)}/{match.group(2)}")
+    return None
 
 
 def get_me() -> Optional[str]:
@@ -77,16 +113,16 @@ def get_me() -> Optional[str]:
     me = out.decode("utf-8", "replace").strip().lower()
     if not me:
         return None
-    if not USERNAME_RE.match(me) or len(me) > USERNAME_MAX_LEN:
+    if not is_valid_username(me):
         return None
     return me
 
 
-def load_trust() -> Tuple[set, bool]:
-    if not TRUST_FILE.exists():
-        fail("trust_missing", f"trust.json not found at {TRUST_FILE}")
+def load_trust(trust_file: Path = TRUST_FILE) -> Tuple[set, bool]:
+    if not trust_file.exists():
+        fail("trust_missing", f"trust.json not found at {trust_file}")
     try:
-        with TRUST_FILE.open("rb") as f:
+        with trust_file.open("rb") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         fail("trust_parse_fail", f"trust.json JSON error: {e}")
@@ -102,7 +138,11 @@ def load_trust() -> Tuple[set, bool]:
     if not all(isinstance(s, str) for s in trusted):
         fail("trust_schema_fail", "trusted_senders contains non-string entries")
 
-    trusted_set = {s.lower() for s in trusted if s}
+    invalid = [s for s in trusted if not is_valid_username(s)]
+    if invalid:
+        fail("trust_schema_fail", f"trusted_senders contains invalid GitHub username(s): {invalid!r}")
+
+    trusted_set = {s.lower() for s in trusted}
     if not trusted_set:
         fail("trust_empty", "trusted_senders contained only empty strings")
 
@@ -116,19 +156,31 @@ def load_trust() -> Tuple[set, bool]:
 
 
 def list_inbox_files(clone: Path) -> list[str]:
-    rc, out, _ = run(["git", "-C", str(clone), "ls-files", "--", "*.txt"])
+    rc, out, err = run(["git", "-C", str(clone), "ls-files", "-z", "--", "*.txt"])
     if rc != 0:
-        return []
-    files = [line for line in out.decode("utf-8", "replace").splitlines() if line]
+        detail = err.decode("utf-8", "replace").strip()
+        fail("git_list_fail", f"git ls-files failed (exit {rc}): {detail}")
+    # Non-UTF-8 paths are replaced, then fail Tier 1; this keeps JSON output printable.
+    files = [item.decode("utf-8", "replace") for item in out.split(b"\0") if item]
     return sorted(files)
 
 
 def verify_tier_1(filename: str) -> Optional[str]:
-    basename = filename.rsplit("/", 1)[-1]
-    m = FILENAME_CAPTURE_RE.match(basename)
+    # Inbox messages are root-level files. Reject both Git's slash separator and
+    # backslashes before the path is passed to any other command.
+    if "/" in filename or "\\" in filename:
+        return None
+    m = FILENAME_CAPTURE_RE.fullmatch(filename)
     if not m:
         return None
-    return m.group(1).lower()
+    timestamp, claimed = m.groups()
+    try:
+        datetime.strptime(timestamp, "%Y-%m-%dT%H-%M-%SZ")
+    except ValueError:
+        return None
+    if not is_valid_username(claimed):
+        return None
+    return claimed.lower()
 
 
 def read_blob(clone: Path, filepath: str) -> Optional[bytes]:
@@ -197,8 +249,15 @@ def get_last_modifying_sha(clone: Path, filepath: str) -> Optional[str]:
     ])
     if rc != 0:
         return None
-    line = out.decode("utf-8", "replace").strip()
-    return line if line else None
+    line = out.decode("ascii", "replace").strip()
+    return line.lower() if SHA_RE.fullmatch(line) else None
+
+
+def get_origin_repo(clone: Path) -> Optional[Tuple[str, str]]:
+    rc, out, _ = run(["git", "-C", str(clone), "remote", "get-url", "origin"])
+    if rc != 0:
+        return None
+    return parse_github_remote(out.decode("utf-8", "replace"))
 
 
 def verify_tier_4(repo: str, sha: str, claimed: str) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -307,8 +366,9 @@ def main() -> None:
     clone_arg = sys.argv[1]
     repo = sys.argv[2]
 
-    if not REPO_PATH_RE.match(repo):
-        fail("bad_repo_arg", f"repo argument '{repo}' fails regex check")
+    parsed_repo = parse_repo(repo)
+    if parsed_repo is None:
+        fail("bad_repo_arg", f"repo argument '{repo}' fails validation")
 
     try:
         clone = Path(clone_arg).resolve()
@@ -321,6 +381,17 @@ def main() -> None:
     me = get_me()
     if not me:
         fail("identity_fail", "gh api user failed or returned invalid username")
+    if parsed_repo[0] != me:
+        fail("repo_owner_mismatch", f"repo owner '{parsed_repo[0]}' does not match authenticated user '{me}'")
+
+    origin_repo = get_origin_repo(clone)
+    if origin_repo is None:
+        fail("origin_invalid", "origin is missing or is not a supported github.com URL")
+    if origin_repo != parsed_repo:
+        fail(
+            "origin_mismatch",
+            f"clone origin '{origin_repo[0]}/{origin_repo[1]}' does not match repo argument '{repo}'",
+        )
 
     trusted_set, require_signed = load_trust()
 
